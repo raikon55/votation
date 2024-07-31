@@ -9,19 +9,28 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-func Enqueue(body string, queueName string) {
-	queue, channel := estabillishConnection(queueName)
-	// defer channel.Close()
-	// defer connection.Close()
+type QueueManager interface {
+	Enqueue(body string, queueName string)
+	Close()
+	estabillishConnection(queueName string)
+}
 
+type RabbitMQ struct {
+	connection *amqp.Connection
+	channel    *amqp.Channel
+	queue      amqp.Queue
+	qm         QueueManager
+}
+
+func (rmq *RabbitMQ) Enqueue(body string, queueName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := channel.PublishWithContext(ctx,
-		"",         // exchange
-		queue.Name, // routing key
-		false,      // mandatory
-		false,      // immediate
+	err := rmq.channel.PublishWithContext(ctx,
+		"",             // exchange
+		rmq.queue.Name, // routing key
+		false,          // mandatory
+		false,          // immediate
 		amqp.Publishing{
 			ContentType: "application/json",
 			Body:        []byte(body),
@@ -29,7 +38,17 @@ func Enqueue(body string, queueName string) {
 	failOnError(err, "Failed to publish a message")
 }
 
-func estabillishConnection(queueName string) (amqp.Queue, *amqp.Channel) {
+func (rmq *RabbitMQ) Close() {
+	rmq.channel.Close()
+	rmq.connection.Close()
+}
+
+func InitRabbitMQ(queueName string) (rmq RabbitMQ) {
+	rmq.estabillishConnection(queueName)
+	return
+}
+
+func (rmq *RabbitMQ) estabillishConnection(queueName string) {
 	urlAmqp := os.Getenv("RABBITMQ_URL")
 
 	conn, err := amqp.Dial(urlAmqp)
@@ -48,7 +67,9 @@ func estabillishConnection(queueName string) (amqp.Queue, *amqp.Channel) {
 	)
 	failOnError(err, "Failed to declare a queue:")
 
-	return q, ch
+	rmq.queue = q
+	rmq.channel = ch
+	rmq.connection = conn
 }
 
 func failOnError(err error, msg string) {
