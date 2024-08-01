@@ -22,8 +22,8 @@ type RabbitMQ struct {
 	qm         QueueManager
 }
 
-func (rmq *RabbitMQ) Enqueue(body string, queueName string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (rmq *RabbitMQ) Enqueue(body string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	err := rmq.channel.PublishWithContext(ctx,
@@ -36,6 +36,22 @@ func (rmq *RabbitMQ) Enqueue(body string, queueName string) {
 			Body:        []byte(body),
 		})
 	failOnError(err, "Failed to publish a message")
+}
+
+func (rmq *RabbitMQ) Consume() <-chan amqp.Delivery {
+	msgs, err := rmq.channel.Consume(
+		rmq.queue.Name, // queue
+		"",             // consumer
+		true,           // auto-ack
+		false,          // exclusive
+		false,          // no-local
+		false,          // no-wait
+		nil,            // args
+	)
+	if err != nil {
+		log.Println("Failed to register a consumer:", err)
+	}
+	return msgs
 }
 
 func (rmq *RabbitMQ) Close() {
