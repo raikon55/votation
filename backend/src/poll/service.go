@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -31,11 +32,11 @@ type Poll struct {
 
 type candidate struct {
 	Name string `json:"name"`
-	Vote int    `json:"vote"`
 }
 
-type pollResult struct {
-	result []candidate
+type PollResult struct {
+	Name  string `json:"name"`
+	Votes int    `json:"votes"`
 }
 
 func (p *Poll) CreateVote(response http.ResponseWriter, request *http.Request) {
@@ -60,6 +61,46 @@ func (p *Poll) CreateVote(response http.ResponseWriter, request *http.Request) {
 }
 
 func (p *Poll) GetVotes(response http.ResponseWriter, request *http.Request) {
+	var results []bson.M
+	var result []PollResult
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := p.collection.Aggregate(ctx, bson.A{
+		bson.D{
+			{"$group",
+				bson.D{
+					{"_id", "$name"},
+					{"total", bson.D{{"$sum", 1}}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("%q", err)
+	}
+
+	err = cursor.All(ctx, &results)
+
+	for _, c := range results {
+		v := fmt.Sprint(c["total"])
+		value, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			log.Println("deu ruim")
+		}
+		r := PollResult{Name: fmt.Sprint(c["_id"]), Votes: int(value)}
+		result = append(result, r)
+	}
+
+	if err != nil {
+		log.Printf("%q", err)
+	}
+
+	response.Header().Add("content-Type", "application/json")
+	response.WriteHeader(http.StatusOK)
+	req, _ := json.Marshal(result)
+	fmt.Fprintln(response, string(req))
 
 }
 
