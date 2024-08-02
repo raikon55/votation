@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -28,10 +29,12 @@ type Poll struct {
 	rm         queue.RabbitMQ
 	conn       *mongo.Client
 	collection *mongo.Collection
+	metric     prometheus.Counter
 }
 
 type candidate struct {
-	Name string `json:"name"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type PollResult struct {
@@ -62,6 +65,33 @@ func (p *Poll) CreateVote(response http.ResponseWriter, request *http.Request) {
 
 func (p *Poll) GetVotes(response http.ResponseWriter, request *http.Request) {
 	var results []bson.M
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cursor, err := p.collection.Aggregate(ctx, bson.A{
+		bson.D{
+			{"$count", "total"},
+		},
+	})
+
+	if err != nil {
+		log.Printf("%q", err)
+	}
+
+	err = cursor.All(ctx, &results)
+	if err != nil {
+		log.Printf("%q", err)
+	}
+
+	response.Header().Add("content-Type", "application/json")
+	response.WriteHeader(http.StatusOK)
+	req, _ := json.Marshal(results[0])
+	fmt.Fprintln(response, string(req))
+}
+
+func (p *Poll) GetVotesByCandidate(response http.ResponseWriter, request *http.Request) {
+	var results []bson.M
 	var result []PollResult
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -82,31 +112,36 @@ func (p *Poll) GetVotes(response http.ResponseWriter, request *http.Request) {
 	}
 
 	err = cursor.All(ctx, &results)
+	if err != nil {
+		log.Printf("%q", err)
+	}
 
 	for _, c := range results {
 		v := fmt.Sprint(c["total"])
 		value, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
-			log.Println("deu ruim")
+			log.Println("Error converting value from database")
 		}
 		r := PollResult{Name: fmt.Sprint(c["_id"]), Votes: int(value)}
 		result = append(result, r)
-	}
-
-	if err != nil {
-		log.Printf("%q", err)
 	}
 
 	response.Header().Add("content-Type", "application/json")
 	response.WriteHeader(http.StatusOK)
 	req, _ := json.Marshal(result)
 	fmt.Fprintln(response, string(req))
-
 }
 
 func Init(rm queue.RabbitMQ) (p Poll) {
 	p.rm = rm
 	p.initMongo()
+
+	p.metric = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "votes_count",
+			Help: "No of request handled by poll server",
+		},
+	)
 
 	enabled, err := strconv.ParseBool(os.Getenv("ENABLE_CONSUMER"))
 	if err != nil {
@@ -131,6 +166,7 @@ func (p *Poll) consumer() {
 			if err != nil {
 				p.rm.Enqueue(string(v.Body))
 			}
+			c.CreatedAt = time.Now().Local()
 			p.save(c)
 		}
 

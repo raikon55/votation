@@ -8,10 +8,8 @@ import (
 	queue "paredao/src/queue"
 
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
-
-// Before init server, create a consumer
-// Use a environment variable to control if consumer will work or not
 
 func main() {
 	queueName := os.Getenv("RABBITMQ_QUEUE")
@@ -20,8 +18,10 @@ func main() {
 
 	route := mux.NewRouter()
 	route.HandleFunc("/vote", p.CreateVote).Methods("POST")
-	route.HandleFunc("/vote", p.GetVotes).Methods("GET")
+	route.HandleFunc("/vote/candidate", p.GetVotesByCandidate).Methods("GET")
+	route.HandleFunc("/vote/total", p.GetVotes).Methods("GET")
 
 	http.Handle("/", route)
+	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
